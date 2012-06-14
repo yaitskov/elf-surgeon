@@ -1,0 +1,14 @@
+*.so
+*.so.bak
+*.bak
+*.dec
+/binutils-2.10
+/pbas
+*.so.1
+/readme
+someprog-d
+someprog
+/readme
+global-func
+explore
+
