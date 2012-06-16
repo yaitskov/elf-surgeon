@@ -38,7 +38,8 @@ int main(int argc, const char ** argv) {
               "usage: %s help   to get list of available commands\n",
               argv[0], argv[0]);
 
-  toDo = find_command(ctx.commands, argc, argv);
+  check_input(toDo = find_command(ctx.commands, argc, argv),
+              "command '%s' not found\n", argv[1]);
   prepare_ctx(&ctx, toDo);
   toDo->code(&ctx);  
   if (ctx.f_out) {
