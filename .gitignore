@@ -5,6 +5,9 @@
 /binutils-2.10
 /pbas
 *.so.1
+*.so.2
+*.so.3
+*.so.4
 /readme
 someprog-d
 someprog

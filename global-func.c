@@ -1,94 +1,166 @@
+/* global-func: Copyright (C) 2012 by Daneel S. Yaitskov <rtfm.rtfm.rtfm@gmail.com>
+ * License GPLv2: GNU GPL version 2.
+ * This is free software; you are free to change and redistribute it.
+ * There is NO WARRANTY, to the extent permitted by law.
+ */
 #include <stdio.h>
 #include <elf.h>
 #include <stdlib.h>
 #include "err.h"
+#include "struct.h"
+#include "proto.h"
 
-typedef struct {
-  const char * lfunc;
-  const char * in_fname;
-  const char * victim_func;
-  const char * out_fname;
-  FILE * f_in;
-  const char * string_table;
-  char * dynamic_strings;
-  FILE * f_out;
-  Elf32_Ehdr * elf_header;
-} Ctx;
-
-typedef struct {
-  Ctx * ctx;
-  Elf32_Shdr   header;
-  Elf32_Sym  * body;
-  char       * names;
-  int          len; // num items in body
-} Section;
-
-typedef struct {
-  Ctx * ctx;
-  Elf32_Phdr   header;
-} Segment;
-
-typedef struct {
-  long         ofs;   // offset from start of file to  Elf32_Sym
-  Elf32_Sym    sym;
-} SectionEntry;
-  
-void  globalize_local_func(Ctx * ctx);
-Elf32_Ehdr * load_elf_header(FILE * fp);
-const char * read_string_table(FILE * fp, Elf32_Ehdr * elf_header);
-void read_dynamic_strings(Ctx * ctx);
-Section * get_section_by_id(Ctx * ctx, const int id);
-const char * get_entry_name(Section * section, SectionEntry * entry);
-Section * find_section_by_type(Ctx * ctx, const int type);
-Segment * find_segment_by_type(Ctx * ctx, const int type);
-SectionEntry * find_entry_by_name(Section * section, const char * name);
-void save_entry(Ctx * ctx, SectionEntry * entry);
-
-#define sek(fp, pos)  fseek(fp, pos, SEEK_SET)
-
-int main(int argc, char ** argv) {
+int main(int argc, const char ** argv) {
   FILE * fp;
-  notz(argc == 5,
-       "usage: %s <lfunc> <victim-func> <path-to-orig-file> <path-to-out-file>\n",
-       argv[0]);
-  notz(fp = fopen(argv[3], "rb"), "file '%s'\n", argv[3]);  
-  {
-    Ctx ctx = { .out_fname = argv[4], .lfunc = argv[1],
-                .f_in = fp, .victim_func = argv[2], .in_fname = argv[3] };
-    const int sz = 100;
-    char buf[sz];
-    int read;
-    notz(ctx.f_out = fopen(argv[4], "wb"), "file '%s'\n", argv[4]);
-    while ((read = fread(buf, 1, sz, ctx.f_in))) {
-      fwrite(buf, read, 1, ctx.f_out);
-    }
-    globalize_local_func(&ctx);
+  Command * toDo;
+  Ctx ctx = { .argc = argc,
+              .argv = argv,
+              .f_out = 0,
+              .f_in = 0,
+              .commands = (Command [])
+              {    { .name = "help",
+                     .code = help,  .flags = 0,
+                     .help = (const char *[]){ "", "print list available commands", 0} },
+                   { .name = "set-func-size", .code = set_func_size,
+                     .flags = FUNC_SIZE | VICTIM_FUNC | IO_FILES,
+                     .help = (const char *[]){ "-v <func-name> -s <num-in-bytes> -i <input-elf> -o <out-elf> ",
+                                 "set arbitary size of function", 0 } },
+                   { .name = "global-func", .code = global_func,
+                     .flags = LOCAL_FUNC | VICTIM_FUNC | IO_FILES,
+                     .help = (const char *[]){ "-v <global-func> -l <local-func> "
+                               "-i <input-elf> -o <out-elf> ",
+                               "copy address and size of local func to global one", 0 } },
+                   { .name = 0 }
+              }
+  };
+  check_input(argc > 1,
+              "usage: %s <command> <args...>\n\n"
+              "usage: %s help\n\n"
+              "to get list of available commands\n",
+              argv[0], argv[0]);
+
+  toDo = find_command(ctx.commands, argc, argv);
+  prepare_ctx(&ctx, toDo);
+  toDo->code(&ctx);  
+  if (ctx.f_out) {
+    const char * fname = find_param(argc, "-o", argv + 2);
+    FILE * fres;
+    nz(!sek(ctx.f_out, 0));    
+    check_input(fres = fopen(fname, "wb"), "cannot write results into file '%s'\n", fname);
+    copy_file(ctx.f_out, fres);
+    fclose(fres);
     fclose(ctx.f_out);
-    fclose(ctx.f_in);
   }
+  if (ctx.f_in)  fclose(ctx.f_in);
   return 0;
 }
 
-void globalize_local_func(Ctx * ctx) {
+void help(Ctx * ctx) {
+  Command * cmd = ctx->commands;
+  printf("list of commands:\n");
+  for (; cmd->name; ++cmd) {
+    const char ** h = cmd->help;
+    printf("%15s  %s\n", cmd->name, *h ? *h : "");
+    while (*++h) 
+      printf("%15s  %s\n", "", *h);
+  }
+}
+
+Command * find_command(Command * cmds, int argc, const char ** argv) {
+  const char * cmd_name = argv[1];
+  while (cmds->name) {
+    if (!strcmp(cmd_name, cmds->name))
+      return cmds;
+    ++cmds;
+  }
+}
+
+/**
+ * open input and output files if required
+ */
+void prepare_ctx(Ctx * ctx, Command * toDo) {
+  int i;
+  if (toDo->flags & OUTPUT_FILE) {
+    const char * fname = find_param(ctx->argc, "-o", ctx->argv + 2);
+    check_input(fname,
+                "command '%s' required argument '-o' <file> for output file\n",
+                toDo->name);
+    // intermediate tmp file cause input and output file can be the same
+    // changing output file may make them unreadable temporally
+    notz(ctx->f_out = tmpfile(),
+         "cannot create tmp file for writing changed file '%s'\n", fname);    
+  }
+  if (toDo->flags & INPUT_FILE) {
+    const char * fname = find_param(ctx->argc, "-i", ctx->argv + 2);
+    check_input(fname,
+                "command '%s' required argument '-i' <file> for input file\n",
+                toDo->name);
+    check_input(ctx->f_in = fopen(fname, "rb"),
+                "cannot open file '%s' for reading\n", fname);      
+  }
+  if (toDo->flags & (INPUT_FILE | OUTPUT_FILE) == (INPUT_FILE | OUTPUT_FILE))
+    copy_file(ctx->f_in, ctx->f_out);
+  if (toDo->flags & VICTIM_FUNC)
+    check_input(find_param(ctx->argc, "-v", ctx->argv + 2),
+                "name of victim function is required. argument is '-v'\n");
+  if (toDo->flags & LOCAL_FUNC)
+    check_input(find_param(ctx->argc, "-l", ctx->argv + 2),
+                "name of local function is required. argument is '-l'\n");    
+  if (toDo->flags & FUNC_SIZE) {
+    const char * size = find_param(ctx->argc, "-s", ctx->argv + 2);
+    unsigned int sz = 0;
+    check_input(size,  "size is required. argument is '-s'\n");
+    check_input(sscanf(size, "%u", &sz), "'-s' argument takes only nonegative  integers\n");
+  }
+}
+
+void set_func_size(Ctx * ctx) {
+  Section * symtab, * dynsym;
+  int new_func_size = find_int_param(ctx->argc, "-s", ctx->argv);
+  SectionEntry * victim_ent;
+  const char * in_fname =     find_param(ctx->argc, "-i", ctx->argv + 2);
+  const char * victim_func =  find_param(ctx->argc, "-v", ctx->argv + 2);
+  
+  elf_load(ctx);  
+  check_input(symtab = find_section_by_type(ctx, SHT_SYMTAB),
+              "file '%s' doesn't have symtab section\n", in_fname);
+  info_user(dynsym = find_section_by_type(ctx, SHT_DYNSYM),
+            "file '%s' doesn't have dynsym section\n", in_fname);
+
+  if (dynsym) {   // optional if local func  
+    victim_ent = find_entry_by_name(dynsym, victim_func);
+    if (victim_ent) {
+      victim_ent->sym.st_size = new_func_size;
+      save_entry(ctx, victim_ent);
+    }
+  }
+  check_input(victim_ent = find_entry_by_name(symtab, victim_func),
+              "symtab section doesn't have symbol '%s'\n",  victim_func);
+  victim_ent->sym.st_size = new_func_size;  
+  save_entry(ctx, victim_ent);  
+}
+
+void global_func(Ctx * ctx) {
   Section * symtab, * dynsym;
 
   SectionEntry * lfunc_entry, * victim_stab, * victim_dyn;
-  nz(ctx->elf_header = load_elf_header(ctx->f_in));
+  const char * in_fname =     find_param(ctx->argc, "-i", ctx->argv + 2);
+  const char * lfunc =        find_param(ctx->argc, "-l", ctx->argv + 2);
+  const char * victim_func =  find_param(ctx->argc, "-v", ctx->argv + 2); 
 
-  ctx->string_table = read_string_table(ctx->f_in, ctx->elf_header);
-  read_dynamic_strings(ctx);
+  elf_load(ctx);
   
-  notz(symtab = find_section_by_type(ctx, SHT_SYMTAB),
-       "file '%s' doesn't have symbol table section\n", ctx->in_fname);
-  notz(dynsym = find_section_by_type(ctx, SHT_DYNSYM),
-       "file '%s' doesn't have symbol table section\n", ctx->in_fname);
+  check_input(symtab = find_section_by_type(ctx, SHT_SYMTAB),
+              "file '%s' doesn't have symbol table section\n", in_fname);
+  check_input(dynsym = find_section_by_type(ctx, SHT_DYNSYM),
+              "file '%s' doesn't have symbol table section\n", in_fname);
   
-  notz(lfunc_entry = find_entry_by_name(symtab, ctx->lfunc),
-       "symtab section doesn't have symbol '%s'\n",  ctx->lfunc);
-  notz(victim_stab = find_entry_by_name(dynsym, ctx->victim_func),
-       "dynsym section doesn't have symbol '%s'\n",  ctx->victim_func);
-  notz(victim_dyn = find_entry_by_name(symtab, ctx->victim_func),
-       "symtab section doesn't have symbol '%s'\n",  ctx->victim_func);       
+  notz(lfunc_entry = find_entry_by_name(symtab, lfunc),
+       "symtab section doesn't have symbol '%s'\n",  lfunc);
+  notz(victim_stab = find_entry_by_name(dynsym, victim_func),
+       "dynsym section doesn't have symbol '%s'\n",  victim_func);
+  notz(victim_dyn = find_entry_by_name(symtab, victim_func),
+       "symtab section doesn't have symbol '%s'\n",  victim_func);       
   
   victim_stab->sym.st_size = lfunc_entry->sym.st_size;
   victim_stab->sym.st_value = lfunc_entry->sym.st_value;
@@ -135,12 +207,13 @@ void read_dynamic_strings(Ctx * ctx) {
   int loadaddr;
   unsigned long str_tab_len;
   unsigned long offset;
+  const char * in_fname =     find_param(ctx->argc, "-i", ctx->argv + 2);  
   notz(load = find_segment_by_type(ctx, PT_LOAD),
-       "file '%s' doesn't have dynamic segment.\n", ctx->in_fname);
+       "file '%s' doesn't have dynamic segment.\n", in_fname);
   // dynamic_addr = segment->p_offset;
   // dynamic_size = segment->p_filesz; in bytes
   notz(dynamic = find_segment_by_type(ctx, PT_DYNAMIC),
-       "file '%s' doesn't have dynamic segment. foad.\n", ctx->in_fname);
+       "file '%s' doesn't have dynamic segment. foad.\n", in_fname);
 
   loadaddr = (load->header.p_vaddr & 0xfffff000) - (load->header.p_offset & 0xfffff000);
 
@@ -255,3 +328,35 @@ void save_entry(Ctx * ctx, SectionEntry * entry) {
        entry->sym.st_name + ctx->string_table);
 }
 
+const char * find_param(int argc, const char * name, const char ** argv) {
+  int i = 0;
+  for (; i < argc; ++i)
+    if (!strcmp(name, argv[i]) && i + 1 < argc) 
+      return argv[i+1];
+  return 0;
+}
+
+void copy_file(FILE * in, FILE * out) {
+  char buf[1024];
+  int read;
+  nz(in);  nz(out);
+  while ((read = fread(buf, 1, sizeof(buf), in))) {
+    ops(read, fwrite(buf, 1, read, out), "");
+  }
+}
+
+void elf_load(Ctx * ctx) {
+  nz(ctx->f_in);
+  nz(ctx->elf_header = load_elf_header(ctx->f_in));
+
+  ctx->string_table = read_string_table(ctx->f_in, ctx->elf_header);
+  read_dynamic_strings(ctx);  
+}
+
+int find_int_param(int argc, const char * name, const char ** argv) {
+  const char * val = find_param(argc, name, argv);
+  unsigned int result;
+  nz(val);
+  nz(sscanf(val, "%u", &result));
+  return result;  
+}
