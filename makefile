@@ -1,5 +1,5 @@
 
-global-func: global-func.c err.h proto.h struct.h makefile
+elf-surgeon: elf-surgeon.c err.h proto.h struct.h makefile
 	gcc -ggdb $< -o $@
 
 

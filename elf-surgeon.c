@@ -1,4 +1,4 @@
-/* global-func: Copyright (C) 2012 by Daneel S. Yaitskov <rtfm.rtfm.rtfm@gmail.com>
+/* elf-surgeon: Copyright (C) 2012 by Daneel S. Yaitskov <rtfm.rtfm.rtfm@gmail.com>
  * License GPLv2: GNU GPL version 2.
  * This is free software; you are free to change and redistribute it.
  * There is NO WARRANTY, to the extent permitted by law.
@@ -34,9 +34,8 @@ int main(int argc, const char ** argv) {
               }
   };
   check_input(argc > 1,
-              "usage: %s <command> <args...>\n\n"
-              "usage: %s help\n\n"
-              "to get list of available commands\n",
+              "usage: %s <command> ...\n"
+              "usage: %s help   to get list of available commands\n",
               argv[0], argv[0]);
 
   toDo = find_command(ctx.commands, argc, argv);
@@ -46,7 +45,8 @@ int main(int argc, const char ** argv) {
     const char * fname = find_param(argc, "-o", argv + 2);
     FILE * fres;
     nz(!sek(ctx.f_out, 0));    
-    check_input(fres = fopen(fname, "wb"), "cannot write results into file '%s'\n", fname);
+    check_input(fres = fopen(fname, "wb"),
+                "cannot write results into file '%s'\n", fname);
     copy_file(ctx.f_out, fres);
     fclose(fres);
     fclose(ctx.f_out);
@@ -64,6 +64,7 @@ void help(Ctx * ctx) {
     while (*++h) 
       printf("%15s  %s\n", "", *h);
   }
+  printf("\nAuthor: Daneel S. Yaitskv <rtfm.rtfm.rtfm@gmail.com>\n");
 }
 
 Command * find_command(Command * cmds, int argc, const char ** argv) {
