@@ -8,10 +8,8 @@
 *.so.2
 *.so.3
 *.so.4
-/readme
 someprog-d
 someprog
-/readme
 global-func
 elf-surgeon
 explore

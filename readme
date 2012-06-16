@@ -1,0 +1,20 @@
+  *** Intro ***
+
+elf-surgeon is toolkit to change existing elf files so libraries or executables.
+
+Now two operation is supported:
+
+  1)  Make local function globally accessible at the expense of another existing global function
+      in the same elf file. After this modification you can use dlsym to call local function.
+      Victim global function becomes unavailable. Both functions are pointed by their names.
+
+  2)  Set manually size of local or global function in elf file by its name.
+
+
+The program requires an elf file with symtab and dynsym sections.
+
+
+  *** Usage ***
+
+  ./elf-surgeon set-func-size -i libsomelib.so.1 -o libsomelib.so.1 -v num_of_all_chars -s 12300
+  ./elf-surgeon global-func -i libsomelib.so.1 -o libsomelib.so.1 -l local_func -v num_of_all_chars
